@@ -2,25 +2,18 @@ package com.ftiland.travelrental.product.service;
 
 import com.ftiland.travelrental.category.dto.CategoryDto;
 import com.ftiland.travelrental.category.dto.CategoryDtoForProductDetail;
-import com.ftiland.travelrental.category.entity.Category;
-import com.ftiland.travelrental.category.repository.CategoryRepository;
 
 import com.ftiland.travelrental.common.exception.BusinessLogicException;
 import com.ftiland.travelrental.common.exception.ExceptionCode;
-import com.ftiland.travelrental.common.utils.GeoUtils;
 import com.ftiland.travelrental.image.dto.ImageDto;
-import com.ftiland.travelrental.image.entity.ImageProduct;
-import com.ftiland.travelrental.image.repository.ImageProductRepository;
+import com.ftiland.travelrental.image.service.DeletedImageService;
 import com.ftiland.travelrental.image.service.ImageProductService;
-import com.ftiland.travelrental.image.service.ImageService;
 import com.ftiland.travelrental.member.service.MemberService;
 
 import com.ftiland.travelrental.member.entity.Member;
 
 import com.ftiland.travelrental.product.dto.*;
 import com.ftiland.travelrental.product.entity.Product;
-import com.ftiland.travelrental.product.entity.ProductCategory;
-import com.ftiland.travelrental.product.repository.ProductCategoryRepository;
 import com.ftiland.travelrental.product.repository.ProductRepository;
 import com.ftiland.travelrental.product.sort.SortBy;
 import lombok.RequiredArgsConstructor;
@@ -45,8 +38,8 @@ public class ProductService {
     private final ProductRepository productRepository;
     private final MemberService memberService;
     private final ProductCategoryService productCategoryService;
-    private final ImageService imageService;
     private final ImageProductService imageProductService;
+    private final DeletedImageService deletedImageService;
 
     @Transactional
     public CreateProduct.Response createProduct(CreateProduct.Request request, Long memberId, List<ImageDto> images) {
@@ -54,9 +47,6 @@ public class ProductService {
         Member member = memberService.findMember(memberId);
 
         validateLocation(member);
-
-        /*Random random = new Random();
-        int totalRateCount = random.nextInt(100) + 1;*/
 
         Product productEntity = Product.builder()
                 .productId(UUID.randomUUID().toString())
@@ -69,9 +59,6 @@ public class ProductService {
                 .totalRateCount(0)
                 .totalRateScore(0)
                 .viewCount(0)
-                /*.totalRateCount(totalRateCount)
-                .totalRateScore(totalRateCount * (random.nextInt(5)+1))
-                .viewCount(random.nextInt(1000))*/
                 .latitude(member.getLatitude())
                 .longitude(member.getLongitude())
                 .address(member.getAddress())
@@ -85,6 +72,8 @@ public class ProductService {
                 productCategoryService.createProductCategories(product, request.getCategoryIds());
 
         imageProductService.createImageProducts(product, images);
+
+        deletedImageService.deleteDeletedImages(images);
 
         return CreateProduct.Response.from(product, productCategories);
     }
@@ -102,7 +91,7 @@ public class ProductService {
     }
 
     @Transactional
-    //@CacheEvict(key = "#productId", value = "products")
+    @CacheEvict(key = "#productId", value = "products")
     public UpdateProduct.Response updateProduct(UpdateProduct.Request request,
                                                 String productId,
                                                 Long memberId,
@@ -131,11 +120,13 @@ public class ProductService {
                     productCategoryService.createProductCategories(product, categoryIds);
                 });
 
+        boolean deleteCheck = !Objects.isNull(images);
+
         List<String> imageFileNames = imageProductService.findImageFileName(productId);
 
         imageProductService.createImageProducts(product, images);
 
-        return UpdateProduct.Response.from(product, imageFileNames);
+        return UpdateProduct.Response.from(product, imageFileNames, deleteCheck);
     }
 
     @Transactional
@@ -155,19 +146,18 @@ public class ProductService {
                 .orElseThrow(() -> new BusinessLogicException(PRODUCT_NOT_FOUND));
     }
 
-    //@Cacheable(key = "#productId", value = "products")
+    @Cacheable(key = "#productId", value = "products")
     public ProductDetailDto findProductDetail(String productId) {
-        log.info("[ProductService] findProductDetail called");
         Product product = findProduct(productId);
 
         List<CategoryDtoForProductDetail> categories = productCategoryService.findCategoriesByProductId(productId);
 
-        List<String> images = imageService.findImageProducts(productId);
+        List<String> images = imageProductService.findImageProducts(productId);
 
         return ProductDetailDto.from(product, categories, images);
     }
 
-    public GetProducts findProducts(Long memberId, int size, int page) {
+    public GetProducts findProductsByMember(Long memberId, int size, int page) {
         Member member = memberService.findMember(memberId);
 
         Page<ProductDto> products = productRepository.findProductDtosByMemberId(memberId, PageRequest.of(page, size));
@@ -175,7 +165,7 @@ public class ProductService {
         return GetProducts.from(products);
     }
 
-    @Transactional
+    @Transactional()
     public void updateView(String productId) {
         Product product = findProduct(productId);
         product.setViewCount(product.getViewCount() + 1);
@@ -250,20 +240,22 @@ public class ProductService {
                 throw new BusinessLogicException(MEMBER_NOT_FOUND);
             }
             Member member = memberService.findMember(memberId);
+            Double bound = distance/100;
+
             // 가까운 순 정렬일 때
             if (sortBy == SortBy.distance) {
 
                 // member가 위치를 가지고 있는지 검증
                 validateLocation(member);
                 Page<ProductDto> products = productRepository.findByCategoryIdOrderByDistanceLimitBound(
-                        categoryId, member.getLatitude(), member.getLongitude(), pageable, distance);
+                        categoryId, member.getLatitude(), member.getLongitude(), pageable, bound);
                 return GetProducts.from(products);
             } else if (sortBy == SortBy.totalRateScore) {
                 return GetProducts.from(productRepository
-                        .findByCategoryIdOrderByRateLimitBound(categoryId, member.getLatitude(), member.getLongitude(), pageable, distance));
+                        .findByCategoryIdOrderByRateLimitBound(categoryId, member.getLatitude(), member.getLongitude(), pageable, bound));
             } else {
                 pageable = PageRequest.of(page, size, Sort.by("p." + sortBy.toString()).descending());
-                return GetProducts.from(productRepository.findByCategoryIdLimitBound(categoryId, member.getLatitude(), member.getLongitude(), pageable, distance));
+                return GetProducts.from(productRepository.findByCategoryIdLimitBound(categoryId, member.getLatitude(), member.getLongitude(), pageable, bound));
             }
         }
     }

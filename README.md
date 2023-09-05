@@ -157,6 +157,7 @@
 |<b>상품 필터 정렬</b>|<b>마이 페이지</b>|
 |![Jul-29-2023 18-08-32](https://github.com/codestates-seb/seb44_main_028/assets/72354092/284fe563-070b-481e-9c46-b7ce5532c9c2)|![Aug-11-2023 03-52-54](https://github.com/codestates-seb/seb44_main_028/assets/72354092/a8deb793-a749-41ce-b987-2254fdf7db1a)|
 
+
 <br>
 
 ## 프로젝트 주요 관심사
